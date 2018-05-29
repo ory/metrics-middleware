@@ -53,6 +53,7 @@ type MetricsManager struct {
 	BuildHash        string            `json:"buildHash"`
 	BuildTime        string            `json:"buildTime"`
 	InstanceID       string            `json:"instanceId"`
+	ServiceName      string            `json:"serviceName"`
 }
 
 func Hash(value string) string {
@@ -67,6 +68,7 @@ func NewMetricsManager(
 	writeKey string,
 	whitelistedURLs []string,
 	logger logrus.FieldLogger,
+	serviceName string,
 ) *MetricsManager {
 	segment, err := analytics.NewWithConfig(writeKey, analytics.Config{
 		Interval: time.Minute * 10,
@@ -86,6 +88,7 @@ func NewMetricsManager(
 		salt:             uuid.New(),
 		shouldCommit:     enable,
 		whitelistedURLs:  whitelistedURLs,
+		ServiceName:      serviceName,
 	}
 	return mm
 }
@@ -110,6 +113,7 @@ func (sw *MetricsManager) RegisterSegment(version, hash, buildTime string) {
 				Set("version", version).
 				Set("Hash", hash).
 				Set("buildTime", buildTime).
+				Set("service", sw.ServiceName).
 				Set("instanceId", sw.InstanceID),
 			Context: &analytics.Context{
 				IP: net.IPv4(0, 0, 0, 0),
@@ -131,7 +135,7 @@ func (sw *MetricsManager) CommitMemoryStatistics() {
 		sw.MemoryStatistics.Update()
 		if err := sw.Segment.Enqueue(analytics.Track{
 			UserId:     sw.ID,
-			Event:      "stats.memory",
+			Event:      "memstats",
 			Properties: analytics.Properties(sw.MemoryStatistics.ToMap()),
 			Context:    &analytics.Context{IP: net.IPv4(0, 0, 0, 0)},
 		}); err != nil {
@@ -178,6 +182,7 @@ func (sw *MetricsManager) ServeHTTP(rw http.ResponseWriter, r *http.Request, nex
 			Set("size", size).
 			Set("latency", latency).
 			Set("instance", sw.InstanceID).
+			Set("service", sw.ServiceName).
 			Set("method", r.Method),
 		Context: &analytics.Context{IP: net.IPv4(0, 0, 0, 0)},
 	})
