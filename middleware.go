@@ -71,7 +71,8 @@ func NewMetricsManager(
 	serviceName string,
 ) *MetricsManager {
 	segment, err := analytics.NewWithConfig(writeKey, analytics.Config{
-		Interval: time.Minute * 10,
+		Interval: time.Hour * 24,
+		BatchSize: 10000000,
 	})
 	if err != nil {
 		logger.WithError(err).Fatalf("Unable to initialise segment.")
