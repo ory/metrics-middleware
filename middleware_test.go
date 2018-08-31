@@ -25,16 +25,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"os"
-	"github.com/spf13/viper"
-	"github.com/sirupsen/logrus"
-	"github.com/urfave/negroni"
-	"time"
-	"github.com/julienschmidt/httprouter"
-	"net/http"
-	"net/http/httptest"
-	"github.com/stretchr/testify/require"
-	"runtime"
 )
 
 func TestAnonymizePath(t *testing.T) {
@@ -60,69 +50,4 @@ func TestAnonymizeQuery(t *testing.T) {
 		"foo": []string{""},
 	}, "somesupersaltysalt"))
 	assert.EqualValues(t, "", m.anonymizeQuery(url.Values{}, "somesupersaltysalt"))
-}
-
-func TestMiddleware(t *testing.T) {
-	wk := os.Getenv("WRITE_KEY")
-	if wk == "" {
-		t.SkipNow()
-		return
-	}
-
-	n := negroni.New()
-	segmentMiddleware := NewMetricsManager(
-		Hash(viper.GetString("DATABASE_URL")),
-		true,
-		wk,
-		[]string{},
-		logrus.New(),
-		"metrics-middleware",
-	)
-	go segmentMiddleware.RegisterSegment("1.0.0", "c1b", time.Now().String())
-	go segmentMiddleware.CommitMemoryStatistics()
-	n.Use(segmentMiddleware)
-	r := httprouter.New()
-	r.GET("/", func(writer http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		writer.WriteHeader(http.StatusNoContent)
-	})
-	n.UseHandler(r)
-
-	ts := httptest.NewServer(n)
-	defer ts.Close()
-
-	printMemUsage(t)
-
-	go func() {
-		for {
-			printMemUsage(t)
-			time.Sleep(time.Second)
-		}
-	}()
-
-	c := ts.Client()
-	//for i := 0; i <= 10; i++ {
-		resp, err := c.Get(ts.URL)
-		require.NoError(t, err)
-		resp.Body.Close()
-		assert.Equal(t, http.StatusNoContent, resp.StatusCode)
-		time.Sleep(time.Millisecond)
-	//}
-
-	time.Sleep(time.Minute)
-
-	printMemUsage(t)
-}
-
-func printMemUsage(t *testing.T) {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
-	t.Logf("Alloc = %v MiB", bToMb(m.Alloc))
-	t.Logf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
-	t.Logf("\tSys = %v MiB", bToMb(m.Sys))
-	t.Logf("\tNumGC = %v\n", m.NumGC)
-}
-
-func bToMb(b uint64) uint64 {
-	return b / 1024 / 1024
 }

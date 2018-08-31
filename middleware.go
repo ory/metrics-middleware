@@ -35,6 +35,8 @@ import (
 	"github.com/segmentio/analytics-go"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/negroni"
+	"io"
+	"math/rand"
 )
 
 type MetricsManager struct {
@@ -44,7 +46,9 @@ type MetricsManager struct {
 	Logger          logrus.FieldLogger `json:"-"`
 	shouldCommit    bool               `json:"-"`
 	salt            string
-	whitelistedURLs []string `json:"-"`
+	whitelistedURLs []string  `json:"-"`
+	sampling        float64   `json:"-"`
+	rng             io.Reader `json:"-"`
 
 	ID               string            `json:"id"`
 	UpTime           int64             `json:"uptime"`
@@ -69,11 +73,14 @@ func NewMetricsManager(
 	whitelistedURLs []string,
 	logger logrus.FieldLogger,
 	serviceName string,
+	sampling float64,
+	endpoint string,
 ) *MetricsManager {
 	segment, err := analytics.NewWithConfig(writeKey, analytics.Config{
-		Interval: time.Hour * 24,
-		BatchSize: 10000000,
+		Interval:  time.Hour * 24,
+		BatchSize: 100,
 	})
+
 	if err != nil {
 		logger.WithError(err).Fatalf("Unable to initialise segment.")
 		return nil
@@ -90,6 +97,40 @@ func NewMetricsManager(
 		shouldCommit:     enable,
 		whitelistedURLs:  whitelistedURLs,
 		ServiceName:      serviceName,
+		sampling:         sampling,
+	}
+	return mm
+}
+
+func NewMetricsManagerWithConfig(
+	id string,
+	enable bool,
+	writeKey string,
+	whitelistedURLs []string,
+	logger logrus.FieldLogger,
+	serviceName string,
+	sampling float64,
+	config analytics.Config,
+) *MetricsManager {
+	segment, err := analytics.NewWithConfig(writeKey, config)
+
+	if err != nil {
+		logger.WithError(err).Fatalf("Unable to initialise segment.")
+		return nil
+	}
+
+	mm := &MetricsManager{
+		InstanceID:       uuid.New(),
+		Segment:          segment,
+		Logger:           logger,
+		MemoryStatistics: &MemoryStatistics{},
+		ID:               id,
+		start:            time.Now().UTC(),
+		salt:             uuid.New(),
+		shouldCommit:     enable,
+		whitelistedURLs:  whitelistedURLs,
+		ServiceName:      serviceName,
+		sampling:         sampling,
 	}
 	return mm
 }
@@ -144,27 +185,28 @@ func (sw *MetricsManager) CommitMemoryStatistics() {
 		} else {
 			sw.Logger.Debug("Telemetry data transmitted")
 		}
-		time.Sleep(time.Hour)
+		time.Sleep(time.Hour * 24)
 	}
 }
 
 func (sw *MetricsManager) ServeHTTP(rw http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
+	start := time.Now()
+
+	next(rw, r)
+
+	if !sw.shouldCommit || rand.Float64() > sw.sampling {
+		return
+	}
+
+	latency := time.Now().UTC().Sub(start.UTC()) / time.Millisecond
+
 	scheme := "https:"
 	if r.TLS == nil {
 		scheme = "http:"
 	}
 
-	start := time.Now().UTC()
 	path := sw.anonymizePath(r.URL.Path, sw.salt)
 	query := sw.anonymizeQuery(r.URL.Query(), sw.salt)
-
-	next(rw, r)
-
-	if !sw.shouldCommit {
-		return
-	}
-
-	latency := time.Now().UTC().Sub(start) / time.Millisecond
 
 	// Collecting request info
 	res := rw.(negroni.ResponseWriter)
